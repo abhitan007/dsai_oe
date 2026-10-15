@@ -1,0 +1,20 @@
+# Variant: language-modelling "recovery" finetuning on C4 (instead of GSM8K SFT).
+# Use with:  python scripts/launch.py --suite <suite> --base configs/base_c4.yaml --set output_dir=results_c4
+name: debug
+output_dir: results_c4
+model: Qwen/Qwen2.5-0.5B
+task: c4
+pipeline: ptq_then_ft
+quant: qoq_intattn
+train_runtime: {}
+merge_for_eval: none
+seed: 0
+dtype: bfloat16
+device: cuda
+lora: {r: 16, alpha: 32, dropout: 0.05, targets: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}
+train: {max_steps: 1000, batch_size: 16, lr: 2.0e-4, seq_len: 1024, max_grad_norm: 0.3, val_every: 200}
+eval:
+  wikitext2: true
+  c4: true
+  gsm8k: false
+  lm_eval_tasks: [arc_easy, arc_challenge, piqa, hellaswag, winogrande]

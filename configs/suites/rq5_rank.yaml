@@ -1,0 +1,20 @@
+# RQ5 - Capacity: how does the LoRA rank needed to recover from quantization compare with the rank
+# needed for plain finetuning?  (alpha = 2r throughout; r=16 comes from rq1.)
+base: configs/base.yaml
+common:
+  quant: qoq_intattn
+  eval: {lm_eval_tasks: []}
+seeds: [0, 1]
+runs:
+  - {name: fp_r2,   set: {pipeline: fp_ft, lora.r: 2,   lora.alpha: 4}}
+  - {name: fp_r8,   set: {pipeline: fp_ft, lora.r: 8,   lora.alpha: 16}}
+  - {name: fp_r16,  set: {pipeline: fp_ft, lora.r: 16,  lora.alpha: 32}}
+  - {name: fp_r64,  set: {pipeline: fp_ft, lora.r: 64,  lora.alpha: 128}}
+  - {name: fp_r128, set: {pipeline: fp_ft, lora.r: 128, lora.alpha: 256}}
+  - {name: q_r2,    set: {pipeline: ptq_then_ft, lora.r: 2,   lora.alpha: 4}}
+  - {name: q_r8,    set: {pipeline: ptq_then_ft, lora.r: 8,   lora.alpha: 16}}
+  - {name: q_r16,   set: {pipeline: ptq_then_ft, lora.r: 16,  lora.alpha: 32}}
+  - {name: q_r64,   set: {pipeline: ptq_then_ft, lora.r: 64,  lora.alpha: 128}}
+  - {name: q_r128,  set: {pipeline: ptq_then_ft, lora.r: 128, lora.alpha: 256}}
+  - {name: q_r16_loftq, set: {pipeline: ptq_then_ft, lora.init: loftq}}
+  - {name: q_r64_loftq, set: {pipeline: ptq_then_ft, lora.r: 64, lora.alpha: 128, lora.init: loftq}}

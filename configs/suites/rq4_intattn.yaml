@@ -1,0 +1,38 @@
+# RQ4 - IntAttention under finetuning.
+#  (a) PTQ sensitivity of IndexSoftmax to LUT resolution b and clipping threshold c (paper Fig. 9),
+#      on top of the full QoQ stack (WikiText-2 only -> cheap).
+#  (b) Does training with IndexSoftmax in the loop (STE) beat training with exact softmax?  And does
+#      finetuning move the optimal clipping threshold c?  (runtime_sweep re-evaluates the same
+#      adapter at several (b, c) without retraining.)
+base: configs/base.yaml
+common:
+  quant: qoq_intattn
+  eval: {lm_eval_tasks: []}
+grid:
+  - name: "ptq_b{quant_int_attn_b}_c{quant_int_attn_c}"
+    axes:
+      quant.int_attn_b: [3, 4, 5, 6]
+      quant.int_attn_c: [4.5, 5.5, 6.6, 7.7, 9.0, 11.0]
+    set: {pipeline: ptq_only, eval: {gsm8k: false, task_val_loss: false}}
+    seeds: [0]
+runs:
+  - name: ft_intattn_in_loop
+    set:
+      pipeline: ptq_then_ft
+      eval: {runtime_sweep: [{int_attn_c: 4.5}, {int_attn_c: 5.5}, {int_attn_c: 7.7}, {int_attn_c: 9.0},
+                             {int_attn_c: 11.0}, {int_attn_b: 3}, {int_attn_b: 4}, {int_attn_b: 6},
+                             {attn_mode: fp}, {attn_mode: quant_only}]}
+  - name: ft_exact_softmax_in_loop
+    set:
+      pipeline: ptq_then_ft
+      train_runtime: {attn_mode: fp}
+      eval: {runtime_sweep: [{int_attn_c: 4.5}, {int_attn_c: 5.5}, {int_attn_c: 7.7}, {int_attn_c: 9.0},
+                             {int_attn_c: 11.0}, {int_attn_b: 3}, {int_attn_b: 4}, {int_attn_b: 6},
+                             {attn_mode: fp}, {attn_mode: quant_only}]}
+  - name: ft_quantonly_attn_in_loop
+    set: {pipeline: ptq_then_ft, train_runtime: {attn_mode: quant_only}}
+  - name: ft_intattn_b3_in_loop
+    set: {pipeline: ptq_then_ft, quant.int_attn_b: 3}
+  - name: ft_intattn_b3_exact_in_loop
+    set: {pipeline: ptq_then_ft, quant.int_attn_b: 3, train_runtime: {attn_mode: fp}}
+seeds: [0, 1, 2]

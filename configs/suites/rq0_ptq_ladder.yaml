@@ -1,0 +1,24 @@
+# RQ0 - Where does accuracy go?  Post-training quantization ladder (no finetuning).
+# Reproduces the QServe Fig.12 ablation ladder on Qwen2.5-0.5B and extends it with IntAttention.
+# Cheap (evaluation only).  GSM8K is evaluated 8-shot here.
+base: configs/base.yaml
+common: {pipeline: ptq_only}
+seeds: [0]
+runs:
+  - {name: fp16,                     set: {pipeline: fp_eval, quant: fp16}}
+  - {name: w8a8,                     set: {quant: w8a8}}
+  - {name: w4a16_g128,               set: {quant: w4a16_g128}}
+  - {name: nf4,                      set: {quant: nf4}}
+  - {name: w4a8,                     set: {quant: w4a8}}
+  - {name: w4a8_rot,                 set: {quant: w4a8_rot}}
+  - {name: w4a8_rot_clip,            set: {quant: w4a8_rot_clip}}
+  - {name: w4a8kv4_rot_clip,         set: {quant: w4a8kv4_rot_clip}}
+  - {name: w4a8kv4_smoothattn,       set: {quant: w4a8kv4_smoothattn}}
+  - {name: w4a8kv4_g128,             set: {quant: w4a8kv4_g128}}
+  - {name: qoq,                      set: {quant: qoq}}
+  - {name: qoq_quantonly_attn,       set: {quant: qoq_quantonly_attn}}
+  - {name: qoq_intattn,              set: {quant: qoq_intattn}}
+  - {name: w4a8kv4_g128_rtn,         set: {quant: w4a8kv4_g128_rtn}}
+  - {name: w4a8kv4_g128_rtn_intattn, set: {quant: w4a8kv4_g128_rtn_intattn}}
+  - {name: intattn_only,             set: {quant: intattn_only}}
+  - {name: quantonly_attn_only,      set: {quant: quantonly_attn_only}}

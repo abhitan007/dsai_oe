@@ -1,0 +1,12 @@
+# Tested with: python 3.10-3.12, torch 2.4-2.8 (CUDA 12.x), transformers 4.56.2
+torch>=2.4
+transformers==4.56.2        # the custom attention hooks into AttentionInterface/AttentionMaskInterface
+accelerate>=0.33
+datasets>=2.20
+numpy
+scipy
+pandas
+pyyaml
+matplotlib
+pytest
+lm_eval==0.4.9              # zero-shot benchmarks (ARC, PIQA, HellaSwag, WinoGrande)

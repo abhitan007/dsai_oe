@@ -1,0 +1,32 @@
+# RQ3b - Do the QoQ PTQ "tricks" still matter once we finetune?  Leave-one-trick-out from the full
+# QoQ + IntAttention stack, before (ptq_only) and after (ptq_then_ft) finetuning.
+base: configs/base.yaml
+common:
+  quant: qoq_intattn
+  eval: {lm_eval_tasks: []}
+seeds: [0, 1, 2]
+grid:
+  - name: "{pipeline}"
+    axes: {pipeline: [ptq_only, ptq_then_ft]}
+    set: {tags: {trick: none_removed}}
+  - name: "{pipeline}_no_rotation"
+    axes: {pipeline: [ptq_only, ptq_then_ft]}
+    set: {quant.rotation: none, tags: {trick: rotation}}
+  - name: "{pipeline}_no_smooth_output"
+    axes: {pipeline: [ptq_only, ptq_then_ft]}
+    set: {quant.smooth_output: false, tags: {trick: smooth_output}}
+  - name: "{pipeline}_no_weight_clip"
+    axes: {pipeline: [ptq_only, ptq_then_ft]}
+    set: {quant.weight_clip: false, tags: {trick: weight_clip}}
+  - name: "{pipeline}_no_smooth_attention"
+    axes: {pipeline: [ptq_only, ptq_then_ft]}
+    set: {quant.smooth_attention: false, tags: {trick: smooth_attention}}
+  - name: "{pipeline}_no_progressive_group"
+    axes: {pipeline: [ptq_only, ptq_then_ft]}
+    set: {quant.w_group_size: -1, tags: {trick: progressive_group}}
+  - name: "{pipeline}_no_reorder"
+    axes: {pipeline: [ptq_only, ptq_then_ft]}
+    set: {quant.reorder: false, tags: {trick: reorder}}
+  - name: "{pipeline}_no_tricks"
+    axes: {pipeline: [ptq_only, ptq_then_ft]}
+    set: {quant: w4a8kv4_g128_rtn_intattn, tags: {trick: all}}

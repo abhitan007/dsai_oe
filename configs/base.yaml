@@ -1,0 +1,56 @@
+# Base run configuration (GSM8K supervised finetuning of Qwen2.5-0.5B).
+# Every suite in configs/suites/ starts from this file and overrides fields.
+name: debug
+output_dir: results
+model: Qwen/Qwen2.5-0.5B
+task: gsm8k                  # finetuning data: gsm8k | c4 | wikitext2 | wikitext103
+pipeline: ptq_then_ft        # fp_eval | fp_ft | ptq_only | ptq_then_ft | ft_then_ptq
+quant: qoq_intattn           # preset name (see qft/config.py QUANT_PRESETS) or {preset: ..., field: value}
+train_runtime: {}            # runtime overrides during training only (a_bits, kv_bits, attn_mode, int_attn_*)
+merge_for_eval: none         # none | requant_deq | requant_fp
+seed: 0
+dtype: bfloat16
+device: cuda
+save_adapter: false
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  targets: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  layers: all
+  init: default              # default | loftq
+  loftq_iters: 1
+  input_quant: true
+
+train:
+  max_steps: 1000            # ~2.2 epochs of GSM8K train (7217 ex.) at batch 16
+  batch_size: 16
+  grad_accum: 1
+  lr: 2.0e-4
+  weight_decay: 0.0
+  warmup_ratio: 0.03
+  scheduler: cosine
+  max_grad_norm: 0.3
+  seq_len: 512
+  grad_checkpointing: false
+  log_every: 10
+  val_every: 200
+  val_batches: 8
+
+eval:
+  wikitext2: true
+  c4: false
+  ppl_seq_len: 2048
+  ppl_batch_size: 4
+  ppl_max_chunks: null
+  gsm8k: true
+  gsm8k_limit: null
+  gsm8k_batch_size: 64
+  gsm8k_max_new_tokens: 256
+  gsm8k_fewshot: auto        # 8-shot for non-finetuned models, 0-shot after GSM8K finetuning
+  lm_eval_tasks: [arc_easy, arc_challenge, piqa, hellaswag, winogrande]
+  lm_eval_limit: null
+  lm_eval_batch_size: 32
+  task_val_loss: true
+  runtime_sweep: []

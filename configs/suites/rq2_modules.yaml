@@ -1,0 +1,53 @@
+# RQ2 - WHICH modules / layers matter most when finetuning a quantized model?
+# Single-module LoRA, leave-one-out LoRA and layer-band LoRA, on the quantized base (qoq_intattn,
+# quantization-aware: ptq_then_ft) AND on the full-precision base (fp_ft), so we can test whether
+# quantization changes the importance order.  Same rank (r=16) everywhere; trainable-parameter
+# counts are recorded so the analysis can also report recovery per parameter.
+base: configs/base.yaml
+common:
+  quant: qoq_intattn
+  eval: {lm_eval_tasks: []}        # GSM8K + WikiText-2 only (keeps the 60+ runs affordable)
+seeds: [0, 1]
+runs:
+  # ---------------- quantized base
+  - {name: q_all, set: {pipeline: ptq_then_ft}}
+  - {name: q_only_q, set: {pipeline: ptq_then_ft, lora.targets: [q_proj]}}
+  - {name: q_only_k, set: {pipeline: ptq_then_ft, lora.targets: [k_proj]}}
+  - {name: q_only_v, set: {pipeline: ptq_then_ft, lora.targets: [v_proj]}}
+  - {name: q_only_o, set: {pipeline: ptq_then_ft, lora.targets: [o_proj]}}
+  - {name: q_only_gate, set: {pipeline: ptq_then_ft, lora.targets: [gate_proj]}}
+  - {name: q_only_up, set: {pipeline: ptq_then_ft, lora.targets: [up_proj]}}
+  - {name: q_only_down, set: {pipeline: ptq_then_ft, lora.targets: [down_proj]}}
+  - {name: q_drop_q, set: {pipeline: ptq_then_ft, lora.targets: [k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}}
+  - {name: q_drop_k, set: {pipeline: ptq_then_ft, lora.targets: [q_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}}
+  - {name: q_drop_v, set: {pipeline: ptq_then_ft, lora.targets: [q_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]}}
+  - {name: q_drop_o, set: {pipeline: ptq_then_ft, lora.targets: [q_proj, k_proj, v_proj, gate_proj, up_proj, down_proj]}}
+  - {name: q_drop_gate, set: {pipeline: ptq_then_ft, lora.targets: [q_proj, k_proj, v_proj, o_proj, up_proj, down_proj]}}
+  - {name: q_drop_up, set: {pipeline: ptq_then_ft, lora.targets: [q_proj, k_proj, v_proj, o_proj, gate_proj, down_proj]}}
+  - {name: q_drop_down, set: {pipeline: ptq_then_ft, lora.targets: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj]}}
+  - {name: q_attn_only, set: {pipeline: ptq_then_ft, lora.targets: [q_proj, k_proj, v_proj, o_proj]}}
+  - {name: q_mlp_only,  set: {pipeline: ptq_then_ft, lora.targets: [gate_proj, up_proj, down_proj]}}
+  - {name: q_layers_first_third, set: {pipeline: ptq_then_ft, lora.layers: first_third}}
+  - {name: q_layers_middle_third, set: {pipeline: ptq_then_ft, lora.layers: middle_third}}
+  - {name: q_layers_last_third, set: {pipeline: ptq_then_ft, lora.layers: last_third}}
+  # ---------------- full-precision base
+  - {name: fp_all, set: {pipeline: fp_ft}}
+  - {name: fp_only_q, set: {pipeline: fp_ft, lora.targets: [q_proj]}}
+  - {name: fp_only_k, set: {pipeline: fp_ft, lora.targets: [k_proj]}}
+  - {name: fp_only_v, set: {pipeline: fp_ft, lora.targets: [v_proj]}}
+  - {name: fp_only_o, set: {pipeline: fp_ft, lora.targets: [o_proj]}}
+  - {name: fp_only_gate, set: {pipeline: fp_ft, lora.targets: [gate_proj]}}
+  - {name: fp_only_up, set: {pipeline: fp_ft, lora.targets: [up_proj]}}
+  - {name: fp_only_down, set: {pipeline: fp_ft, lora.targets: [down_proj]}}
+  - {name: fp_drop_q, set: {pipeline: fp_ft, lora.targets: [k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}}
+  - {name: fp_drop_k, set: {pipeline: fp_ft, lora.targets: [q_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}}
+  - {name: fp_drop_v, set: {pipeline: fp_ft, lora.targets: [q_proj, k_proj, o_proj, gate_proj, up_proj, down_proj]}}
+  - {name: fp_drop_o, set: {pipeline: fp_ft, lora.targets: [q_proj, k_proj, v_proj, gate_proj, up_proj, down_proj]}}
+  - {name: fp_drop_gate, set: {pipeline: fp_ft, lora.targets: [q_proj, k_proj, v_proj, o_proj, up_proj, down_proj]}}
+  - {name: fp_drop_up, set: {pipeline: fp_ft, lora.targets: [q_proj, k_proj, v_proj, o_proj, gate_proj, down_proj]}}
+  - {name: fp_drop_down, set: {pipeline: fp_ft, lora.targets: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj]}}
+  - {name: fp_attn_only, set: {pipeline: fp_ft, lora.targets: [q_proj, k_proj, v_proj, o_proj]}}
+  - {name: fp_mlp_only,  set: {pipeline: fp_ft, lora.targets: [gate_proj, up_proj, down_proj]}}
+  - {name: fp_layers_first_third, set: {pipeline: fp_ft, lora.layers: first_third}}
+  - {name: fp_layers_middle_third, set: {pipeline: fp_ft, lora.layers: middle_third}}
+  - {name: fp_layers_last_third, set: {pipeline: fp_ft, lora.layers: last_third}}

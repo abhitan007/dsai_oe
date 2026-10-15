@@ -1,0 +1,25 @@
+# RQ3a - Which QUANTIZATION COMPONENT hurts most, and which one does finetuning repair?
+# Full 2^4 factorial over {W4, A8, KV4, IntAttention} (QoQ transforms always on; they are exact in
+# FP), evaluated after PTQ and after quantization-aware LoRA.  The analysis computes Shapley
+# values of the accuracy drop per component before and after finetuning -> importance order.
+base: configs/base.yaml
+common:
+  quant: qoq_intattn
+  eval: {lm_eval_tasks: [arc_easy, arc_challenge, piqa, hellaswag, winogrande]}
+seeds: [0, 1, 2]
+grid:
+  - name: "ptq_w{quant_w_bits}_a{quant_a_bits}_kv{quant_kv_bits}_{quant_attn_mode}"
+    axes:
+      quant.w_bits: [16, 4]
+      quant.a_bits: [16, 8]
+      quant.kv_bits: [16, 4]
+      quant.attn_mode: [fp, int]
+    set: {pipeline: ptq_only}
+    seeds: [0]
+  - name: "ft_w{quant_w_bits}_a{quant_a_bits}_kv{quant_kv_bits}_{quant_attn_mode}"
+    axes:
+      quant.w_bits: [16, 4]
+      quant.a_bits: [16, 8]
+      quant.kv_bits: [16, 4]
+      quant.attn_mode: [fp, int]
+    set: {pipeline: ptq_then_ft}

@@ -1,0 +1,15 @@
+# Smoke test: every pipeline end-to-end in a few minutes (tiny step counts / eval limits).
+base: configs/base.yaml
+common:
+  quant: qoq_intattn
+  train: {max_steps: 20, val_every: 10, log_every: 5}
+  eval: {ppl_max_chunks: 8, gsm8k_limit: 64, lm_eval_tasks: [arc_easy], lm_eval_limit: 100,
+         runtime_sweep: [{int_attn_c: 9.0}]}
+seeds: [0]
+runs:
+  - {name: fp_eval,      set: {pipeline: fp_eval}}
+  - {name: ptq_only,     set: {pipeline: ptq_only}}
+  - {name: fp_ft,        set: {pipeline: fp_ft}}
+  - {name: ptq_then_ft,  set: {pipeline: ptq_then_ft}}
+  - {name: ft_then_ptq,  set: {pipeline: ft_then_ptq}}
+  - {name: merge_fp,     set: {pipeline: ptq_then_ft, merge_for_eval: requant_fp, lora.init: loftq}}

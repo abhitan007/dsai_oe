@@ -1,0 +1,30 @@
+# RQ1 - ORDER of operations: should we quantize first or finetune first, and which quantizers
+# must be "in the loop" during finetuning?  Target deployment: QoQ W4A8KV4-g128 + IntAttention.
+base: configs/base.yaml
+common: {quant: qoq_intattn}
+seeds: [0, 1, 2]
+runs:
+  # references
+  - {name: fp_eval,  set: {pipeline: fp_eval},  seeds: [0]}
+  - {name: fp_ft,    set: {pipeline: fp_ft}}                      # upper bound (FP LoRA)
+  - {name: ptq_only, set: {pipeline: ptq_only}, seeds: [0]}       # lower bound
+  # P1: finetune -> merge -> PTQ  (classic "train in FP, quantize for deployment")
+  - {name: ft_then_ptq, set: {pipeline: ft_then_ptq}}
+  # P2: PTQ -> LoRA, with increasing amounts of the deployment quantization simulated in training
+  - name: ptq_ft_wonly                 # QLoRA-style: only weights quantized while training
+    set: {pipeline: ptq_then_ft, train_runtime: {a_bits: 16, kv_bits: 16, attn_mode: fp}}
+  - name: ptq_ft_w_a                   # + A8 activations
+    set: {pipeline: ptq_then_ft, train_runtime: {kv_bits: 16, attn_mode: fp}}
+  - name: ptq_ft_w_a_kv                # + KV4 (exact softmax)
+    set: {pipeline: ptq_then_ft, train_runtime: {attn_mode: fp}}
+  - name: ptq_ft_full                  # + IntAttention: train exactly what is deployed
+    set: {pipeline: ptq_then_ft}
+  # P3: deployment form of the adapter
+  - {name: ptq_ft_full_merge_deq, set: {pipeline: ptq_then_ft, merge_for_eval: requant_deq}}
+  - {name: ptq_ft_full_merge_fp,  set: {pipeline: ptq_then_ft, merge_for_eval: requant_fp}}
+  # P4: initialisation that is aware of the quantization error
+  - {name: ptq_ft_full_loftq,     set: {pipeline: ptq_then_ft, lora.init: loftq}}
+  # LoRA branch fed with full-precision instead of INT8 activations (not deployable on INT8 GEMM)
+  - {name: ptq_ft_full_lorafpin,  set: {pipeline: ptq_then_ft, lora.input_quant: false}}
+  # reference: standard QLoRA (NF4 weights, 16-bit everything else)
+  - {name: qlora_nf4,             set: {pipeline: ptq_then_ft, quant: nf4}}
