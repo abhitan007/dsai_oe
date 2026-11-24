@@ -1,0 +1,14 @@
+# Installed into the project venv on the cluster, ON TOP OF the container's own torch/numpy
+# (the venv is created with --system-site-packages; torch and numpy are pinned by a constraints file
+#  generated from the container, so pip can never replace the P100-compatible builds).
+# The same versions must be used in WSL by cluster/prefetch_assets.py so the offline HF cache matches.
+transformers==4.56.2
+datasets==4.4.1
+huggingface_hub==0.36.2
+accelerate==1.10.1
+lm_eval==0.4.9
+pyyaml
+scipy
+pandas
+matplotlib
+pytest

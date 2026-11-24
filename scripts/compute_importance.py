@@ -65,12 +65,14 @@ def main():
     g = torch.Generator().manual_seed(cfg.seed)
     loader = torch.utils.data.DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, generator=g,
                                          collate_fn=lambda b: collate_left_pad(b, tok.pad_token_id))
+    # bf16 autocast only on GPUs with native bf16 (compute capability >= 8, e.g. A100/H100); fp32 on P100.
+    use_bf16 = cfg.device == "cuda" and torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8
     model.train()
     for b, batch in enumerate(loader):
         if b >= args.n_batches:
             break
         batch = {k: v.to(cfg.device) for k, v in batch.items()}
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=cfg.device == "cuda"):
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_bf16):
             loss = causal_lm_loss(model, batch)
         loss.backward()
         for n, l in lins.items():

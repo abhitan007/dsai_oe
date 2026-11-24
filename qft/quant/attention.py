@@ -81,25 +81,48 @@ def _scale_dims(granularity: str):
     raise ValueError(granularity)
 
 
+# Max elements of one [B, H, rows, Lk] score tensor; the query rows are processed in slices of this size.
+# Every op after Q/K/V quantization is row-wise, so slicing the query rows gives bit-identical outputs while
+# keeping peak memory bounded (e.g. GSM8K few-shot generation: 16 prompts x 14 heads x ~1k x ~1k scores).
+INT_ATTN_CHUNK_ELEMS = 2 ** 25
+
+
 @torch.no_grad()
 def integer_attention(q, k, v, valid, scaling: float, st: AttnQuantState) -> torch.Tensor:
     """Simulated integer attention.  q:[B,H,Lq,D], k,v:[B,H,Lk,D] (fp32), valid: bool [B|1,1,Lq,Lk]."""
+    if st.mode not in ("quant_only", "int"):
+        raise ValueError(st.mode)
     dims = _scale_dims(st.granularity)
     key_valid = valid.any(dim=-2).unsqueeze(-1)       # [B|1,1,Lk,1]  key is attended by some query
     query_valid = valid.any(dim=-1).unsqueeze(-1)     # [B|1,1,Lq,1]
-    q_hat, s_q = quant_sym(q, 8, dims, valid=query_valid)
+    q_hat, s_q = quant_sym(q, 8, dims, valid=query_valid)    # scales use all rows (as before slicing)
     k_hat, s_k = quant_sym(k, 8, dims, valid=key_valid)
     v_hat, s_v = quant_sym(v, 8, dims, valid=key_valid)
-    a_hat = q_hat @ k_hat.transpose(-1, -2)          # INT32 logits (exact in fp32 for D <= 128)
-    alpha = (s_q * s_k.transpose(-1, -2)) * scaling   # broadcastable to [B,H,Lq,Lk]
+    k_hat_t = k_hat.transpose(-1, -2)
+    v_eff = v_hat if st.granularity != "per_token" else v_hat * s_v
+    lut = build_lut(st.lut_bits, st.clip_c, q.device) if st.mode == "int" else None
 
+    B, H, Lq, _ = q.shape
+    Lk = k.shape[-2]
+    rows = max(1, min(Lq, INT_ATTN_CHUNK_ELEMS // max(1, B * H * Lk)))
+    out = torch.empty(B, H, Lq, v.shape[-1], dtype=q.dtype, device=q.device)
+    for r0 in range(0, Lq, rows):
+        sl = slice(r0, min(Lq, r0 + rows))
+        vm = valid[..., sl, :] if valid.shape[-2] == Lq else valid
+        sq = s_q[..., sl, :] if s_q.shape[-2] == Lq else s_q
+        out[:, :, sl] = _int_attention_rows(q_hat[:, :, sl], k_hat_t, v_eff, s_v, sq, s_k, vm, scaling, st, lut)
+    return out
+
+
+def _int_attention_rows(q_hat, k_hat_t, v_eff, s_v, s_q, s_k, valid, scaling, st, lut):
+    a_hat = q_hat @ k_hat_t                           # INT32 logits (exact in fp32 for D <= 128)
+    alpha = (s_q * s_k.transpose(-1, -2)) * scaling   # broadcastable to [B,H,rows,Lk]
     if st.mode == "quant_only":
         logits = (alpha * a_hat).masked_fill(~valid, float("-inf"))
         p = torch.softmax(logits, dim=-1).nan_to_num(0.0)              # FP32 softmax
         p_hat = torch.round(p * st.p_scale)                             # requantize P
-    elif st.mode == "int":
+    else:
         n_lut = 2 ** st.lut_bits
-        lut = build_lut(st.lut_bits, st.clip_c, q.device)
         c_int = torch.round(st.clip_c / alpha).clamp(min=1.0)           # Eq. 8
         row_max = a_hat.masked_fill(~valid, float("-inf")).amax(-1, keepdim=True)
         row_max = torch.where(torch.isfinite(row_max), row_max, torch.zeros_like(row_max))
@@ -107,15 +130,15 @@ def integer_attention(q, k, v, valid, scaling: float, st: AttnQuantState) -> tor
         delta = torch.where(valid, delta, c_int)                         # masked keys -> LUT zero entry
         delta = torch.minimum(delta, c_int)                              # Eq. 9 clipping
         idx = torch.round(delta / c_int * (n_lut - 1)).long().clamp(0, n_lut - 1)   # Eq. 11
+        del delta
         e_hat = lut[idx]                                                 # Eq. 14 (UINT8 gather)
+        del idx
         row_sum = e_hat.sum(-1, keepdim=True)                            # INT32 accumulation
         p_hat = torch.where(row_sum > 0, torch.round(st.p_scale * e_hat / row_sum.clamp(min=1)),
                             torch.zeros_like(e_hat))                     # Eq. 15 UINT8 P
-    else:
-        raise ValueError(st.mode)
-    out = (p_hat @ v_hat) * (s_v / st.p_scale) if st.granularity != "per_token" else \
-        (p_hat @ (v_hat * s_v)) / st.p_scale
-    return out
+    if st.granularity != "per_token":
+        return (p_hat @ v_eff) * (s_v / st.p_scale)
+    return (p_hat @ v_eff) / st.p_scale
 
 
 def qft_attention_forward(module, query, key, value, attention_mask, scaling=None, dropout: float = 0.0, **kwargs):

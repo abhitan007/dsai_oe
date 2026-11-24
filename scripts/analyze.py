@@ -1,9 +1,11 @@
-"""Aggregate all result.json files into tables, importance rankings and figures.
+"""Aggregate all result.json files into tables, importance rankings, significance tests and figures.
 
     python scripts/analyze.py --results results            # writes results/REPORT.md, summary.csv, figures/
 
 Everything is computed from whatever runs exist; sections with missing data are skipped.
-Means are over seeds; +- is the sample standard deviation (n shown).
+Means are over seeds; ± is the sample standard deviation (n shown). With a single seed, GSM8K
+differences are tested with an exact McNemar test on the per-question correctness (paired: every
+run answers the same 1,319 test questions).
 """
 import argparse
 import glob
@@ -50,10 +52,16 @@ def load(results_dir):
         name = cfg["name"]
         suite = tags.get("suite", name.split("/")[0] if "/" in name else "adhoc")
         run = tags.get("run", name.split("/", 1)[-1])
+        train = r.get("train") or {}
+        val_history = train.get("val_history") or []
         row = {"suite": suite, "run": run, "seed": cfg["seed"], "pipeline": cfg["pipeline"], "cfg": cfg,
                "tags": tags, "lora_params": (r.get("lora") or {}).get("lora_params"),
-               "train_seconds": (r.get("train") or {}).get("train_seconds"),
-               "runtime_sweep": m.get("runtime_sweep"), "lm_eval": m.get("lm_eval") or {}}
+               "train_seconds": train.get("train_seconds"), "total_seconds": r.get("total_seconds"),
+               "gpu": (r.get("env") or {}).get("gpu"),
+               "runtime_sweep": m.get("runtime_sweep"), "lm_eval": m.get("lm_eval") or {},
+               "gsm8k_correct": m.get("gsm8k_correct"), "task_val_loss_before": m.get("task_val_loss_before"),
+               # held-out loss at the end of training, measured with the *training-time* quantizers
+               "train_val_loss": val_history[-1]["val_loss"] if val_history else None}
         for k in METRICS:
             row[k] = m.get(k)
         if row["lm_eval"]:
@@ -112,6 +120,44 @@ def kendall(x, y):
     return float(r.statistic if hasattr(r, "statistic") else r.correlation), float(r.pvalue)
 
 
+def mcnemar(rows_a, rows_b):
+    """Paired exact McNemar test on GSM8K per-question correctness, pooled over the seeds both runs have.
+
+    Returns (accuracy difference a - b, #questions only a solved, #only b solved, two-sided p) or None."""
+    from scipy.stats import binomtest
+    by_seed_b = {r["seed"]: r["gsm8k_correct"] for r in rows_b if r.get("gsm8k_correct")}
+    only_a = only_b = total = 0
+    for r in rows_a:
+        ca, cb = r.get("gsm8k_correct"), by_seed_b.get(r["seed"])
+        if not ca or not cb or len(ca) != len(cb):
+            continue
+        only_a += sum(x and not y for x, y in zip(ca, cb))
+        only_b += sum(y and not x for x, y in zip(ca, cb))
+        total += len(ca)
+    if total == 0:
+        return None
+    p = binomtest(only_a, only_a + only_b, 0.5).pvalue if only_a + only_b else 1.0
+    return (only_a - only_b) / total, only_a, only_b, float(p)
+
+
+def significance_table(runs_a, runs_b, pairs):
+    """pairs: [(run a, run b, description)] -> markdown table of paired McNemar tests (missing pairs skipped)."""
+    lines = []
+    for a, b, what in pairs:
+        if a not in runs_a or b not in runs_b:
+            continue
+        res = mcnemar(runs_a[a], runs_b[b])
+        if res is None:
+            continue
+        diff, only_a, only_b, p = res
+        lines.append([what, f"`{a}` vs `{b}`", f"{diff * 100:+.2f}", f"{only_a} / {only_b}",
+                      f"{p:.2g}", "yes" if p < 0.05 else "no"])
+    if not lines:
+        return None
+    return table(["comparison", "runs (a vs b)", "Δ GSM8K (pp)", "only a / only b correct", "p (McNemar)",
+                  "significant (5%)"], lines)
+
+
 # ------------------------------------------------------------------ sections
 def rq0(rows, out, figs):
     runs = by_run(rows, "rq0_ptq_ladder")
@@ -129,6 +175,51 @@ def rq0(rows, out, figs):
     out.append("GSM8K is 8-shot here (the base model is not instruction-tuned).\n")
     out.append(table(["config", "WikiText-2 PPL ↓", "GSM8K 8-shot (%) ↑", "zero-shot avg (%) ↑"], lines))
     out.append("")
+    sig = significance_table(runs, runs, [
+        ("fp16", "w8a8", "W8A8 vs FP16"),
+        ("nf4", "w4a16_g128", "NF4 vs RTN W4-g128 (weight-only)"),
+        ("w4a8_rot", "w4a8", "+ Hadamard rotation / smoothing"),
+        ("w4a8_rot_clip", "w4a8_rot", "+ weight clipping"),
+        ("qoq", "qoq_intattn", "IndexSoftmax on top of QoQ"),
+        ("qoq_intattn", "qoq_quantonly_attn", "IndexSoftmax vs Quant-Only softmax"),
+        ("fp16", "intattn_only", "IntAttention alone"),
+        ("intattn_only", "quantonly_attn_only", "IndexSoftmax vs Quant-Only (FP weights)"),
+    ])
+    if sig:
+        out.append("Paired significance of selected ladder steps (GSM8K):\n")
+        out.append(sig)
+        out.append("")
+    _ladder_figure(figs, runs, [n for n in order if n in runs])
+
+
+def _ladder_figure(figs, runs, names):
+    """Two panels sharing the config axis: WikiText-2 PPL (log scale) and GSM8K 8-shot accuracy."""
+    ppl = [agg(runs[n], "wikitext2_ppl") for n in names]
+    acc = [agg(runs[n], "gsm8k_acc") for n in names]
+    if not names or any(a is None for a in ppl + acc):
+        return
+    plt = _plt()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 0.3 * len(names) + 1.3), sharey=True)
+    y = np.arange(len(names))[::-1]
+    ax1.barh(y, [a["mean"] for a in ppl], color=SERIES[0], height=0.6)
+    ax1.set_xscale("log")
+    ticks = [t for t in (10, 20, 50, 100, 200, 500, 1000) if t <= max(a["mean"] for a in ppl) * 1.5]
+    ax1.set_xticks(ticks, [str(t) for t in ticks])
+    ax1.xaxis.set_minor_locator(plt.NullLocator())
+    ax1.set_xlim(10, max(a["mean"] for a in ppl) * 1.6)
+    ax1.set_xlabel("WikiText-2 perplexity (log scale, lower is better)")
+    ax2.barh(y, [a["mean"] * 100 for a in acc], color=SERIES[1], height=0.6)
+    ax2.set_xlabel("GSM8K 8-shot accuracy (%)")
+    for yi, a, b in zip(y, ppl, acc):
+        ax1.text(a["mean"], yi, f" {a['mean']:.1f}", va="center", fontsize=7, color=INK)
+        ax2.text(b["mean"] * 100, yi, f" {b['mean'] * 100:.1f}", va="center", fontsize=7, color=INK)
+    ax1.set_yticks(y, names)
+    for ax in (ax1, ax2):
+        ax.grid(axis="y", visible=False)
+    ax1.set_title("Post-training quantization ladder (no finetuning)", loc="left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(figs, "rq0_ladder.png"), dpi=160)
+    plt.close(fig)
 
 
 def rq1(rows, out, figs):
@@ -155,8 +246,39 @@ def rq1(rows, out, figs):
     ranked.sort(reverse=True)
     out.append("\n**Importance order of pipelines (GSM8K, best first):** " +
                " > ".join(f"`{n}` ({m * 100:.1f})" for m, n in ranked) + "\n")
+    sig = significance_table(runs, runs, [
+        ("ptq_ft_full", "ft_then_ptq", "quantize first vs finetune first"),
+        ("ptq_ft_w_a", "ptq_ft_wonly", "A8 added to the training loop"),
+        ("ptq_ft_w_a_kv", "ptq_ft_w_a", "KV4 added to the training loop"),
+        ("ptq_ft_full", "ptq_ft_w_a_kv", "IndexSoftmax added to the training loop"),
+        ("ptq_ft_full_loftq", "ptq_ft_full", "LoftQ instead of standard LoRA init"),
+        ("ptq_ft_full_lorafpin", "ptq_ft_full", "FP instead of INT8 input to the LoRA branch"),
+        ("ptq_ft_full_merge_fp", "ptq_ft_full", "merge into FP weights + re-quantize"),
+        ("ptq_ft_full_merge_deq", "ptq_ft_full", "merge into dequantized weights + re-quantize"),
+        ("ptq_ft_full", "fp_ft", "integer stack vs FP LoRA"),
+        ("qlora_nf4", "fp_ft", "NF4 QLoRA vs FP LoRA"),
+    ])
+    if sig:
+        out.append("Paired significance of the key comparisons:\n")
+        out.append(sig)
+        out.append("")
+    mismatch = []
+    for name in sorted(runs):
+        rs = runs[name]
+        tv, dv = agg(rs, "train_val_loss"), agg(rs, "task_val_loss")
+        if tv and dv:
+            mismatch.append([name, f"{tv['mean']:.3f}", f"{dv['mean']:.3f}", f"{dv['mean'] - tv['mean']:+.3f}"])
+    if mismatch:
+        out.append("Train/deploy mismatch: held-out GSM8K loss at the end of training, measured with the "
+                   "training-time quantizers, and the same loss on the deployed model. A large positive gap means "
+                   "the deployed model is not the one that was trained (gaps of a few thousandths are sampling noise: the "
+                   "training-time value uses 8 validation batches, the final one 16).\n")
+        out.append(table(["run", "val loss (training form)", "val loss (deployed form)", "gap"], mismatch))
+        out.append("")
+    n_seeds = max(len(runs[n]) for _, n in ranked) if ranked else 0
     _bar_figure(figs, "rq1_pipelines.png", [(n, runs[n]) for _, n in ranked], "gsm8k_acc",
-                "GSM8K accuracy by pipeline (mean ± std over seeds)", ref)
+                "GSM8K accuracy of the deployed model by pipeline" +
+                (" (mean ± std over seeds)" if n_seeds > 1 else " (single seed)"), ref)
 
 
 def _bar_figure(figs, fname, items, metric, title, ref=None):
@@ -299,6 +421,18 @@ def rq3(rows, out, figs):
             out.append(table(["stage", "metric", "unit", *factors, "total", "damage order (worst first)"], lines))
             out.append("\nNegative accuracy / positive log-PPL entries are damage attributed to that component. "
                        "Comparing the PTQ and post-finetuning rows shows which damage finetuning repairs.\n")
+            if ("ptq", "gsm8k_acc") in res and ("ft", "gsm8k_acc") in res:
+                before, after = res[("ptq", "gsm8k_acc")][0], res[("ft", "gsm8k_acc")][0]
+                rep = []
+                for f in sorted(factors, key=lambda f: before[f]):
+                    share = (before[f] - after[f]) / before[f] if before[f] < -0.01 else None
+                    rep.append([f, f"{before[f] * 100:+.2f}", f"{after[f] * 100:+.2f}",
+                                f"{(after[f] - before[f]) * 100:+.2f}", f"{share * 100:.0f}%" if share is not None else "-"])
+                out.append("How much of each component's GSM8K damage quantization-aware LoRA repairs "
+                           "(for components that cost less than 1 pp the share is not meaningful and is left blank):\n")
+                out.append(table(["component", "Shapley before FT (pp)", "after FT (pp)", "repaired (pp)",
+                                  "repaired share"], rep))
+                out.append("")
             _shapley_figure(figs, res, factors)
     runs = by_run(rows, "rq3_tricks")
     if runs:
@@ -474,8 +608,12 @@ def main():
     figs = os.path.join(args.results, "figures")
     os.makedirs(figs, exist_ok=True)
     write_csv(rows, os.path.join(args.results, "summary.csv"))
+    gpus = sorted({r["gpu"] for r in rows if r.get("gpu")})
+    hours = sum(r["total_seconds"] or 0 for r in rows) / 3600
     out = ["# Results report (auto-generated by scripts/analyze.py)\n",
-           f"{len(rows)} runs found. Mean ± sample std over seeds.\n"]
+           f"{len(rows)} runs found ({hours:.1f} GPU-hours" + (f" on {', '.join(gpus)}" if gpus else "") + "). "
+           "Mean ± sample std over seeds; with one seed, GSM8K differences below about 2.5 pp are not "
+           "significant on their own (see the McNemar tables).\n"]
     rq0(rows, out, figs)
     rq1(rows, out, figs)
     rq2(rows, out, figs, os.path.join(args.results, "importance"))

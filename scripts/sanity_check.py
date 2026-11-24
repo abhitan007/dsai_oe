@@ -35,8 +35,16 @@ def main():
                                                      "w4a8kv4_rot_clip", "w4a8kv4_smoothattn", "w4a8kv4_g128",
                                                      "qoq", "qoq_quantonly_attn", "qoq_intattn",
                                                      "w4a8kv4_g128_rtn", "intattn_only", "nf4"])
+    ap.add_argument("--dtype", default="auto", choices=["auto", "float32", "bfloat16", "float16"],
+                    help="auto = bfloat16 on GPUs with native bf16 (compute capability >= 8.0, e.g. A100/H100), "
+                         "else float32 (e.g. P100)")
     args = ap.parse_args()
-    dtype = torch.bfloat16 if args.device == "cuda" else torch.float32
+    if args.dtype == "auto":
+        native_bf16 = args.device == "cuda" and torch.cuda.get_device_capability(0)[0] >= 8
+        dtype = torch.bfloat16 if native_bf16 else torch.float32
+    else:
+        dtype = getattr(torch, args.dtype)
+    print(f"[sanity] device={args.device} dtype={dtype}")
 
     from transformers import AutoModelForCausalLM
     model, tok = load_model(args.model, args.device, torch.float32)

@@ -1,6 +1,7 @@
 """Evaluation: perplexity (WikiText-2 / C4), GSM8K exact match, lm-evaluation-harness zero-shot."""
 from __future__ import annotations
 
+import math
 import re
 import time
 
@@ -31,7 +32,7 @@ def eval_ppl(model, ids: torch.Tensor, seq_len: int = 2048, batch_size: int = 4,
             tgt = x[:, c + 1:e + 1]
             nll += F.cross_entropy(logits.reshape(-1, logits.shape[-1]), tgt.reshape(-1), reduction="sum").item()
             count += tgt.numel()
-    return float(torch.exp(torch.tensor(nll / count)))
+    return math.exp(nll / count)          # in double precision (a float32 exp hides changes below ~1e-7)
 
 
 # --------------------------------------------------------------------------------------

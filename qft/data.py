@@ -13,9 +13,13 @@ C4_VAL = "en/c4-validation.00000-of-00008.json.gz"
 # raw text sources
 # --------------------------------------------------------------------------------------
 def _c4(split: str):
+    """One C4 shard.  The file is fetched with hf_hub_download (served from the hub cache when offline)
+    and read with the local json builder: load_dataset("allenai/c4", data_files=...) cannot be re-opened
+    with HF_DATASETS_OFFLINE=1, which is how the cluster compute nodes run."""
     from datasets import load_dataset
-    files = {"train": C4_TRAIN} if split == "train" else {"validation": C4_VAL}
-    return load_dataset("allenai/c4", data_files=files, split="train" if split == "train" else "validation")
+    from huggingface_hub import hf_hub_download
+    path = hf_hub_download("allenai/c4", C4_TRAIN if split == "train" else C4_VAL, repo_type="dataset")
+    return load_dataset("json", data_files=path, split="train")
 
 
 def _wikitext(split: str, name: str = "wikitext-2-raw-v1"):

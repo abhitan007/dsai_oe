@@ -12,7 +12,7 @@ Suite file format:
         set: {pipeline: ptq_then_ft, quant: qoq_intattn}
         seeds: [0]                   # optional per-run seeds (e.g. deterministic PTQ-only runs)
     grid:                            # optional cartesian products -> extra runs
-      - name: "fact_w{quant.w_bits}_a{quant.a_bits}"
+      - name: "fact_w{quant_w_bits}_a{quant_a_bits}"   # dots in axis names become underscores
         axes: {quant.w_bits: [16, 4], quant.a_bits: [16, 8]}
         set: {...}
 

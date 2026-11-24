@@ -279,3 +279,23 @@ def test_chunked_loss_matches_hf():
     g_ours = torch.autograd.grad(ours, [p for n, p in m.named_parameters() if "lora_B" in n])
     assert torch.allclose(ours, ref, atol=1e-5), (ours, ref)
     assert all(torch.allclose(a, b, atol=1e-6) for a, b in zip(g_ours, g_ref))
+
+
+def test_integer_attention_row_chunking_is_exact():
+    """Slicing the query rows (to bound memory) must not change integer attention outputs."""
+    import qft.quant.attention as A
+    torch.manual_seed(0)
+    B, H, L = 3, 4, 33
+    q, k, v = (torch.randn(B, H, L, 16) * 3 for _ in range(3))
+    valid = torch.ones(L, L).tril().bool()[None, None].expand(B, 1, L, L).clone()
+    valid[1, ..., :5] = False                           # left padding
+    old = A.INT_ATTN_CHUNK_ELEMS
+    try:
+        for mode in ("int", "quant_only"):
+            st = A.AttnQuantState(mode=mode)
+            A.INT_ATTN_CHUNK_ELEMS = 2 ** 30
+            full = A.integer_attention(q, k, v, valid, 0.25, st)
+            A.INT_ATTN_CHUNK_ELEMS = 5 * B * H * L          # 5 rows per slice
+            assert torch.equal(full, A.integer_attention(q, k, v, valid, 0.25, st))
+    finally:
+        A.INT_ATTN_CHUNK_ELEMS = old
